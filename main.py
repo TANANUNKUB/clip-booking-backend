@@ -18,6 +18,14 @@ from contextlib import asynccontextmanager
 # Load environment variables
 load_dotenv(override=True)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    start_scheduler()
+    yield
+    # Shutdown
+    stop_scheduler()
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Clip Booking API",
@@ -61,13 +69,6 @@ scheduler = AsyncIOScheduler()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    start_scheduler()
-    yield
-    # Shutdown
-    stop_scheduler()
 
 # Pydantic models
 class PaymentRequest(BaseModel):
@@ -234,31 +235,31 @@ async def upload_file_to_supabase_storage(file_content: bytes, filename: str, co
         return None
 
 async def cleanup_old_bookings():
-    """Clean up bookings older than BOOKING_CLEANUP_MINUTES"""
+    """Clean up pending bookings older than BOOKING_CLEANUP_MINUTES"""
     try:
-        logger.info("Starting cleanup of old bookings...")
+        logger.info("Starting cleanup of old pending bookings...")
         
         # Calculate cutoff time
         cutoff_time = datetime.now() - timedelta(minutes=BOOKING_CLEANUP_MINUTES)
         
-        # Get old bookings
-        result = supabase.table("bookings").select("booking_id, created_at").lt("created_at", cutoff_time.isoformat()).execute()
+        # Get old pending bookings only
+        result = supabase.table("bookings").select("booking_id, created_at, status").lt("created_at", cutoff_time.isoformat()).eq("status", "pending").execute()
         
         if not result.data:
-            logger.info("No old bookings found to clean up")
+            logger.info("No old pending bookings found to clean up")
             return
         
-        # Delete old bookings
+        # Delete old pending bookings
         deleted_count = 0
         for booking in result.data:
             try:
                 supabase.table("bookings").delete().eq("booking_id", booking["booking_id"]).execute()
                 deleted_count += 1
-                logger.info(f"Deleted old booking: {booking['booking_id']}")
+                logger.info(f"Deleted old pending booking: {booking['booking_id']}")
             except Exception as e:
                 logger.error(f"Error deleting booking {booking['booking_id']}: {e}")
         
-        logger.info(f"Cleanup completed. Deleted {deleted_count} old bookings")
+        logger.info(f"Cleanup completed. Deleted {deleted_count} old pending bookings")
         
     except Exception as e:
         logger.error(f"Error in cleanup_old_bookings: {e}")

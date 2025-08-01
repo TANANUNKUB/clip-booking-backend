@@ -2,7 +2,7 @@
 
 ## Overview
 
-ระบบ Cronjob สำหรับลบ booking ที่เก่ากว่า 10 นาที (หรือตามที่กำหนดใน `BOOKING_CLEANUP_MINUTES`)
+ระบบ Cronjob สำหรับลบ **pending bookings** ที่เก่ากว่า 10 นาที (หรือตามที่กำหนดใน `BOOKING_CLEANUP_MINUTES`) โดยทำงานทุก 5 นาที
 
 ## Configuration
 
@@ -10,7 +10,7 @@
 
 ```env
 # Cronjob Configuration
-BOOKING_CLEANUP_MINUTES=10    # จำนวนนาทีที่ booking จะถูกลบ (default: 10)
+BOOKING_CLEANUP_MINUTES=10    # จำนวนนาทีที่ pending booking จะถูกลบ (default: 10)
 CRON_ENABLED=true             # เปิด/ปิด cronjob (true/false)
 ```
 
@@ -20,7 +20,7 @@ CRON_ENABLED=true             # เปิด/ปิด cronjob (true/false)
 
 #### `POST /cleanup/old-bookings`
 
-เรียกใช้การลบ booking เก่าทันที (ไม่ต้องรอ cronjob)
+เรียกใช้การลบ pending booking เก่าทันที (ไม่ต้องรอ cronjob)
 
 **Response:**
 ```json
@@ -47,8 +47,8 @@ CRON_ENABLED=true             # เปิด/ปิด cronjob (true/false)
     {
       "id": "cleanup_old_bookings",
       "name": "Cleanup Old Bookings",
-      "next_run_time": "2024-01-15T10:31:00",
-      "trigger": "cron[minute='*']"
+      "next_run_time": "2024-01-15T10:35:00",
+      "trigger": "cron[minute='*/5']"
     }
   ],
   "timestamp": "2024-01-15T10:30:00"
@@ -88,19 +88,23 @@ CRON_ENABLED=true             # เปิด/ปิด cronjob (true/false)
 ## How It Works
 
 ### Automatic Cleanup
-- Cronjob จะทำงานทุกนาที
-- ตรวจสอบ booking ที่มี `created_at` เก่ากว่า `BOOKING_CLEANUP_MINUTES` นาที
-- ลบ booking ที่เก่าออกโดยอัตโนมัติ
+- Cronjob จะทำงานทุก 5 นาที
+- ตรวจสอบ booking ที่มี `status = "pending"` และ `created_at` เก่ากว่า `BOOKING_CLEANUP_MINUTES` นาที
+- ลบเฉพาะ pending booking ที่เก่าออกโดยอัตโนมัติ
 - บันทึก log การทำงาน
 
 ### Manual Cleanup
 - สามารถเรียกใช้ API `/cleanup/old-bookings` เพื่อลบทันที
 - ไม่ต้องรอ cronjob
 
+### Booking Status Filter
+- **ลบเฉพาะ**: `status = "pending"`
+- **ไม่ลบ**: `status = "confirmed"`, `status = "cancelled"`, หรือ status อื่นๆ
+
 ## Logging
 
 ระบบจะบันทึก log ดังนี้:
-- `INFO`: เริ่มต้น cleanup, ไม่พบ booking เก่า, cleanup เสร็จสิ้น
+- `INFO`: เริ่มต้น cleanup, ไม่พบ pending booking เก่า, cleanup เสร็จสิ้น
 - `ERROR`: เกิดข้อผิดพลาดในการลบ booking หรือ scheduler
 
 ## Example Usage
@@ -110,7 +114,7 @@ CRON_ENABLED=true             # เปิด/ปิด cronjob (true/false)
 curl -X GET "http://localhost:8000/cleanup/status"
 ```
 
-### 2. ลบ booking เก่าทันที
+### 2. ลบ pending booking เก่าทันที
 ```bash
 curl -X POST "http://localhost:8000/cleanup/old-bookings"
 ```
@@ -127,7 +131,7 @@ curl -X POST "http://localhost:8000/cleanup/start"
 
 ## Configuration Examples
 
-### ลบ booking เก่ากว่า 5 นาที
+### ลบ pending booking เก่ากว่า 5 นาที
 ```env
 BOOKING_CLEANUP_MINUTES=5
 ```
@@ -146,5 +150,7 @@ CRON_ENABLED=true
 
 - Cronjob จะเริ่มทำงานอัตโนมัติเมื่อ server เริ่มต้น
 - สามารถปิด/เปิด cronjob ได้ผ่าน API หรือ environment variable
+- **ลบเฉพาะ pending bookings เท่านั้น** - booking ที่ confirmed แล้วจะไม่ถูกลบ
 - การลบ booking จะไม่ส่งผลกระทบต่อ payment records
-- ระบบจะบันทึก log ทุกการทำงานเพื่อการตรวจสอบ 
+- ระบบจะบันทึก log ทุกการทำงานเพื่อการตรวจสอบ
+- ทำงานทุก 5 นาที (ไม่ใช่ทุกนาทีแล้ว) 
