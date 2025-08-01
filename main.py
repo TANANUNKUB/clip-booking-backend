@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -9,6 +9,11 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 import httpx
 import uvicorn
+import asyncio
+import logging
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from contextlib import asynccontextmanager
 
 # Load environment variables
 load_dotenv(override=True)
@@ -17,7 +22,8 @@ load_dotenv(override=True)
 app = FastAPI(
     title="Clip Booking API",
     description="API for managing clip editing bookings with payment integration",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS middleware
@@ -39,10 +45,29 @@ time_diff_limit = int(os.getenv("TIME_DIFF_LIMIT"))
 amount = int(os.getenv("AMOUNT"))
 receiver_name = os.getenv("RECEIVER_NAME")
 
+# Cronjob Configuration
+BOOKING_CLEANUP_MINUTES = int(os.getenv("BOOKING_CLEANUP_MINUTES", "10"))
+CRON_ENABLED = os.getenv("CRON_ENABLED", "true").lower() == "true"
+
 if not supabase_url or not supabase_key:
     raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY must be set in environment variables")
 
 supabase: Client = create_client(supabase_url, supabase_key)
+
+# Initialize scheduler for cronjobs
+scheduler = AsyncIOScheduler()
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    start_scheduler()
+    yield
+    # Shutdown
+    stop_scheduler()
 
 # Pydantic models
 class PaymentRequest(BaseModel):
@@ -194,22 +219,79 @@ async def upload_file_to_supabase_storage(file_content: bytes, filename: str, co
 
         storage_filename = f"slips/{int(datetime.now().timestamp())}_{filename}"
         
-        # อัปโหลดไฟล์ลง Supabase Storage
         result = supabase.storage.from_(bucket_name).upload(
             path=storage_filename,
             file=file_content,
             file_options={"content-type": content_type}
         )
         
-        # สร้าง public URL
         public_url = supabase.storage.from_(bucket_name).get_public_url(storage_filename)
-        
         print(f"File uploaded successfully: {public_url}")
         return public_url
         
     except Exception as e:
         print(f"Error uploading file: {e}")
         return None
+
+async def cleanup_old_bookings():
+    """Clean up bookings older than BOOKING_CLEANUP_MINUTES"""
+    try:
+        logger.info("Starting cleanup of old bookings...")
+        
+        # Calculate cutoff time
+        cutoff_time = datetime.now() - timedelta(minutes=BOOKING_CLEANUP_MINUTES)
+        
+        # Get old bookings
+        result = supabase.table("bookings").select("booking_id, created_at").lt("created_at", cutoff_time.isoformat()).execute()
+        
+        if not result.data:
+            logger.info("No old bookings found to clean up")
+            return
+        
+        # Delete old bookings
+        deleted_count = 0
+        for booking in result.data:
+            try:
+                supabase.table("bookings").delete().eq("booking_id", booking["booking_id"]).execute()
+                deleted_count += 1
+                logger.info(f"Deleted old booking: {booking['booking_id']}")
+            except Exception as e:
+                logger.error(f"Error deleting booking {booking['booking_id']}: {e}")
+        
+        logger.info(f"Cleanup completed. Deleted {deleted_count} old bookings")
+        
+    except Exception as e:
+        logger.error(f"Error in cleanup_old_bookings: {e}")
+
+def start_scheduler():
+    """Start the cronjob scheduler"""
+    if not CRON_ENABLED:
+        logger.info("Cronjobs disabled. Set CRON_ENABLED=true to enable.")
+        return
+    
+    try:
+        # Add cronjob to run every 5 minutes
+        scheduler.add_job(
+            cleanup_old_bookings,
+            CronTrigger(minute="*/5"),  # Run every 5 minutes
+            id="cleanup_old_bookings",
+            name="Cleanup Old Bookings",
+            replace_existing=True
+        )
+        
+        scheduler.start()
+        logger.info("Cronjob scheduler started successfully - running every 5 minutes")
+        
+    except Exception as e:
+        logger.error(f"Error starting scheduler: {e}")
+
+def stop_scheduler():
+    """Stop the cronjob scheduler"""
+    try:
+        scheduler.shutdown()
+        logger.info("Cronjob scheduler stopped")
+    except Exception as e:
+        logger.error(f"Error stopping scheduler: {e}")
 
 # API Endpoints
 @app.post("/generate-payment")
@@ -530,6 +612,72 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "service": "Clip Booking API"
     }
+
+@app.post("/cleanup/old-bookings")
+async def manual_cleanup_old_bookings():
+    """Manually trigger cleanup of old bookings"""
+    try:
+        await cleanup_old_bookings()
+        return {
+            "success": True,
+            "message": "Manual cleanup completed",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error in manual cleanup: {e}")
+        raise HTTPException(status_code=500, detail="Error during cleanup")
+
+@app.get("/cleanup/status")
+async def get_cleanup_status():
+    """Get cronjob status and configuration"""
+    try:
+        jobs = []
+        for job in scheduler.get_jobs():
+            jobs.append({
+                "id": job.id,
+                "name": job.name,
+                "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+                "trigger": str(job.trigger)
+            })
+        
+        return {
+            "scheduler_running": scheduler.running,
+            "cron_enabled": CRON_ENABLED,
+            "cleanup_minutes": BOOKING_CLEANUP_MINUTES,
+            "jobs": jobs,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting cleanup status: {e}")
+        raise HTTPException(status_code=500, detail="Error getting status")
+
+@app.post("/cleanup/start")
+async def start_cleanup_scheduler():
+    """Start the cleanup scheduler"""
+    try:
+        start_scheduler()
+        return {
+            "success": True,
+            "message": "Cleanup scheduler started",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error starting scheduler: {e}")
+        raise HTTPException(status_code=500, detail="Error starting scheduler")
+
+@app.post("/cleanup/stop")
+async def stop_cleanup_scheduler():
+    """Stop the cleanup scheduler"""
+    try:
+        stop_scheduler()
+        return {
+            "success": True,
+            "message": "Cleanup scheduler stopped",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error stopping scheduler: {e}")
+        raise HTTPException(status_code=500, detail="Error stopping scheduler")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000) 
