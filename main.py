@@ -162,13 +162,13 @@ async def verify_slip_with_easyslip(file_content: bytes, filename: str) -> EasyS
         files = {
             "file": (filename, file_content, "image/jpeg")
         }
-        # data = {
-        #     "checkDuplicate": "true"
-        # }
+        data = {
+            "checkDuplicate": "true"
+        }
         
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, headers=headers, files=files,)
-            # data=data
+            response = await client.post(url, headers=headers, files=files, data=data)
+            
             if response.status_code == 200:
                 # Success response
                 response_data = response.json()
