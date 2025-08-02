@@ -5,7 +5,8 @@ services:
     build: .
     ports:
       - "8000:8000"
-    
+    volumes:
+      - /Users/kk/kungfu/clip-booking-backend:/app
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

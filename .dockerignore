@@ -6,7 +6,7 @@
 README.md
 *.md
 
-# Environment files
+# Environment files (will be mounted as volume)
 .env
 .env.local
 .env.*.local
@@ -42,6 +42,7 @@ ENV/
 .vscode/
 .idea/
 *.swp
+*.swp
 *.swo
 
 # OS
@@ -54,4 +55,13 @@ docker-compose.yml
 .dockerignore
 
 # Logs
-*.log 
+*.log
+logs/
+
+# Test files
+test_*.py
+*_test.py
+
+# Temporary files
+*.tmp
+*.temp 

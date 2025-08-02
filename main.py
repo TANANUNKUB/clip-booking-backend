@@ -362,6 +362,36 @@ async def get_bookings():
         print(f"Error getting bookings: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
+@app.get("/bookings/user/{user_id}", response_model=List[Booking])
+async def get_user_bookings(user_id: str):
+    """Get bookings for a specific user by user_id"""
+    try:
+        result = supabase.table("bookings").select("*").eq("user_id", user_id).execute()
+        return result.data
+    except Exception as e:
+        print(f"Error getting user bookings: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/bookings/user/{user_id}/pending", response_model=List[Booking])
+async def get_user_pending_bookings(user_id: str):
+    """Get pending bookings for a specific user by user_id"""
+    try:
+        result = supabase.table("bookings").select("*").eq("user_id", user_id).eq("status", "pending").execute()
+        return result.data
+    except Exception as e:
+        print(f"Error getting user pending bookings: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/bookings/user/{user_id}/confirmed", response_model=List[Booking])
+async def get_user_confirmed_bookings(user_id: str):
+    """Get confirmed bookings for a specific user by user_id"""
+    try:
+        result = supabase.table("bookings").select("*").eq("user_id", user_id).eq("status", "confirmed").execute()
+        return result.data
+    except Exception as e:
+        print(f"Error getting user confirmed bookings: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 @app.get("/payments", response_model=List[Payment])
 async def get_payments():
     try:
